@@ -4,9 +4,23 @@ import sys
 import errno
 import argparse
 import os
+import struct
+
+
+def recvall(sock, n):
+    # Helper function to recv n bytes or return None if EOF is hit
+    data = bytearray()
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet:
+            return None
+        data.extend(packet)
+    return data
+
 
 def main():
-    if len(sys.argv) < 2 :
+    size_of_int = 4
+    if len(sys.argv) < 2:
         print("The program should get port number")
     else:
         port = int(sys.argv[1])
@@ -14,21 +28,14 @@ def main():
             soc_serv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             soc_serv.bind(('', port))
             soc_serv.listen(10)
-            while (True):  # to ask about the another while and
+            while True:  # to ask about the another while and
                 (client_socket, address) = soc_serv.accept()
-                path = ""
-                read = 1;
-                while read > 0 :
-                    variable_bytes = client_socket.recv(2)
-                    print ("is last?")
-                    decoded =  variable_bytes.decode();
-                    read = len(decoded)
-                    path = path + decoded
-                    print(path)
-                    print("done iteraion")
-                dir_info = os.listdir(path)  # to make to ls-l
-
-                client_socket.sendall(('\n'.join(dir_info)).encode())
+                len_of_rec_msg = struct.unpack(">i", soc_serv.recv(size_of_int))[0]
+                path = recvall(client_socket, len_of_rec_msg).decode()
+                dir_info = os.popen("ls -l", path).read()
+                len_of_send_msg = struct.pack(">i", len(dir_info))
+                client_socket.sendall(len_of_send_msg)
+                client_socket.sendall(dir_info.encode())
                 client_socket.close()
             soc_serv.close()
         except OSError as error:
@@ -40,5 +47,5 @@ def main():
                 print(error.stderror)
 
 
-if __name__ == "__main__" :
+if __name__ == "__main__":
     main()
