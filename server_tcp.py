@@ -30,9 +30,9 @@ def main():
             soc_serv.listen(10)
             while True:  # to ask about the another while and
                 (client_socket, address) = soc_serv.accept()
-                len_of_rec_msg = struct.unpack(">i", soc_serv.recv(size_of_int))[0]
+                len_of_rec_msg = struct.unpack(">i", client_socket.recv(size_of_int))[0]
                 path = recvall(client_socket, len_of_rec_msg).decode()
-                dir_info = os.popen("ls -l", path).read()
+                dir_info = os.popen("ls -l " + path).read()
                 len_of_send_msg = struct.pack(">i", len(dir_info))
                 client_socket.sendall(len_of_send_msg)
                 client_socket.sendall(dir_info.encode())

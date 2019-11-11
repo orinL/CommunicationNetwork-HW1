@@ -16,30 +16,28 @@ def recvall(sock, n):
     return data
 
 
-def main():
-    if len(sys.argv) < 4:
-        print("The program should get ip,port number , and directory path")
-    else:
-        ip = sys.argv[1]
-        port = sys.argv[2]
-        dir_path = sys.argv[3]
-        try:
-            soc_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            soc_client.connect((ip, int(port)))
-            data = struct.pack(">i", len(dir_path))
-            soc_client.sendall(data)
-            soc_client.sendall(dir_path.encode())
-            len_of_rec_msg = struct.unpack(">i", soc_client.recv(4))[0]
-            data = recvall(soc_client, len_of_rec_msg)
-            print(data.decode())
-            soc_client.close()
-        except OSError as error:
-            if error.errno == errno.ECONNREFUSED:
-                print("Connection refused")
-            else:
-                print(error.stderror)
-            soc_client.close()
+def main(ip, port, dir_path):
+    soc_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        soc_client.connect((ip, port))
+        size_of_msg = struct.pack(">I", len(dir_path))
+        soc_client.sendall(size_of_msg)
+        soc_client.sendall(dir_path.encode())
+        data_rec = recvall(soc_client, 4)
+        len_of_rec_msg = struct.unpack(">I", data_rec)[0]
+        data = recvall(soc_client, len_of_rec_msg)
+        print(data.decode())
+        soc_client.close()
+    except OSError as error:
+        if error.errno == errno.ECONNREFUSED:
+            print("Connection refused")
+        else:
+            print(error.stderror)
+        soc_client.close()
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) == 4:
+        main(sys.argv[1], int(sys.argv[2]), sys.argv[3])
+    else:
+       print("The program should get ip, port number and directory path")
