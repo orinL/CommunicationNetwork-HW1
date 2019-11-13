@@ -24,22 +24,34 @@ WRITE_MODE = 1
 MODE = -1
 
 
+def create_msg (opcode, *args):
+    msg = [opcode]
+    if opcode == RRQ or opcode == WRQ:
+        msg.append(args[0].encode())
+        msg.append(b'0')
+        msg.append("octet".encode())
+        msg.append(b'0')
+    elif opcode == DATA:
+        # TODO make sure we pass only 2 bytes
+        msg.append(str(args[0]).encode())
+        # TODO check if it is array or not
+        msg.extend(args[1].encode())
+    elif opcode == ACK:
+        # TODO make sure we pass only 2 bytes
+        msg.append(str(args[0]).encode())
+    elif opcode == ERROR:
+        # TODO make sure we pass only 2 bytes
+        msg.append(str(args[0]).encode())
+        msg.append(args[1].encode(0))
+        msg.append(b'0')
+    return msg
+
+
 # the inverse-parser : get msg type number  params_list of the message we want to send as declared in
 # the protocol and its length. also get address (host,port) , socket_server, mode of connecrion (read or write)
 # and a retransmit counter.
 # the function create a byte-decoded message for reacj message type as declared in the protocol
 # and call to send_message in order to send the byte-coded massage.
-
-def create_msg_and_send_it(opcode, *args):
-    msg = [opcode, args[0]]
-    if opcode == 1 or opcode == 2:
-        msg.append(0)
-        msg.append("octet")
-        msg.append(0)
-    elif opcode == 3 or opcode == 5:
-        msg.append(args[1])
-    msg.extend([0] * (512 - len(msg)))
-    return msg
 
 
 # gets message type, message(in byte-code) and address( = (host,address)) and send it to the client in address
@@ -48,13 +60,14 @@ def create_msg_and_send_it(opcode, *args):
 # if the message that was send is an error, no_request_need list is returned, and it's indicating that
 # we can move on and sending the next message whithout the need to wait for an ack on it.
 # if we sent DATA, ACK,WRQ,RRQ, the ack's params list on the sended message will be returned
-def send_msg(current_msg_type, msg, address, sock_server, mode):
-    sock_server.sendto(msg.encode(), address)
-    params_list = []
+def send_msg(msg_params, address, sock_server, retransmit_counter):
+    msg = create_msg(msg_params)
+    sock_server.sendto(msg, address)
     no_request_need = [NO_REQUEST_NEEDED]
-    if current_msg_type != ERROR:
+    if msg_params[0] != ERROR:
         # wait for an appropriate acknowledgement or timeout
-        return wait_for_acknowledgement(sock_server, params_list, mode)
+        return wait_for_acknowledgement(sock_server, msg_params, retransmit_counter, address)
+    # TODO if we implement error_handler then update this funct
     else:
         return no_request_need
 
@@ -67,15 +80,16 @@ def send_msg(current_msg_type, msg, address, sock_server, mode):
 # otherwise, we will ignore the packet and wait for another one.
 # if connection is timeout, None will be returned.
 # else return the new message params list
-def wait_for_acknowledgement(sock_server, msg_waiting_for_ack_params, retransmit_counter):
+def wait_for_acknowledgement(sock_server, msg_waiting_for_ack_params, retransmit_counter, address):
     received_appropriate_packet = False
     params_error_list = [ERROR, "05", "sent to wrong address, packet discarded", "0"]
     sock_server.settimeout(30.0)
     try:
+        packet_params = []
         while not received_appropriate_packet:
             packet = sock_server.recvfrom(MAX_DATA_LEN * 2)
-            if packet[1][1] != TID:
-                create_msg_and_send_it(ERROR, params_error_list, 4, packet[1])
+            if packet[1][1] != address[1]:
+                send_msg(params_error_list, packet[1], sock_server, 0)
                 continue
             else:
                 packet_params = parser(packet)
@@ -86,11 +100,12 @@ def wait_for_acknowledgement(sock_server, msg_waiting_for_ack_params, retransmit
                         received_appropriate_packet = True
                     else:
                         continue
-                elif msg_waiting_for_ack_params[0] == ACK and MODE == READ_MODE:
+                elif msg_waiting_for_ack_params[0] == ACK:
                     if packet_params[0] == DATA or packet_params[0] == ERROR:
                         received_appropriate_packet = True
                     else:
                         continue
+                # TODO need to check if server can send RRQ or WRQ
                 elif msg_waiting_for_ack_params[0] == RRQ:
                     if packet_params[0] == DATA or packet_params[0] == ERROR:
                         received_appropriate_packet = True
@@ -107,15 +122,9 @@ def wait_for_acknowledgement(sock_server, msg_waiting_for_ack_params, retransmit
                     continue
         return packet_params
     except OSError as os_err:
-        # Mock fix only
-        addr = 0
-        mode = 0
-        params_list = []
         if os_err == TimeoutError:
             if retransmit_counter < 4:
-                retransmit_counter += 1
-                create_msg_and_send_it(msg_waiting_for_ack_params[0], msg_waiting_for_ack_params, len(params_list),
-                                       addr, sock_server, mode, retransmit_counter)
+                send_msg(msg_waiting_for_ack_params, address, sock_server, retransmit_counter + 1)
             else:
                 return None
         else:
@@ -132,12 +141,11 @@ def read(soc_serv, msg_params_list, addr):
     except OSError as err:
         print(err.stderror)
         if err == FileNotFoundError:
-            create_msg_and_send_it(ERROR, [ERROR, "01", "File not found", "0"], 4, addr, soc_serv, 0)
+            send_msg([ERROR, "01", "File not found", "0"], addr, soc_serv, 0)
         elif err == PermissionError:
-            create_msg_and_send_it(ERROR, [ERROR, "02", "Access to file denied", "0"], 4, addr, soc_serv, 0)
+            send_msg([ERROR, "02", "Access to file denied", "0"], addr, soc_serv, 0)
         else:
-            create_msg_and_send_it(ERROR, [ERROR, "00", "Unknown error while opening the file", "0"], 4, addr, soc_serv,
-                                   0)
+            send_msg([ERROR, "00", "Unknown error while opening the file", "0"], addr, soc_serv, 0)
         return
     got_to_eof = 0
     while got_to_eof == 0:
@@ -145,15 +153,17 @@ def read(soc_serv, msg_params_list, addr):
         data = f.read(512)
         if len(data) < 512:
             got_to_eof = 1
+        # make sure what is block number format to send
         new_data_params[1] = str(block_number)
         new_data_params[2] = data
-        new_msg_params = create_msg_and_send_it(DATA, new_data_params, 3, addr, soc_serv, 0)
-        if new_msg_params == None:
+        # checking for ack right params in send_msg
+        new_msg_params = send_msg(new_data_params, addr, soc_serv, 0)
+        if new_msg_params is None:
             print("Connection Timeouted")
             f.close()
             return
         elif new_msg_params[0] == ERROR:
-            print("Error Code : " + new_msg_params[1] + "Error Message : " + new_msg_params[2])
+            print("Error Code : " + new_msg_params[1] + " ,Error Message : " + new_msg_params[2])
             f.close()
             return
         else:  # which mean we got an ack on the data block we sent, and can continue
@@ -162,94 +172,94 @@ def read(soc_serv, msg_params_list, addr):
     return
 
 
-# need to implement
-def write(soc_serv, addr, path, adder):
-    # Mock fix only
-    msg_params_list = []
-
-    ack_params = [ACK, "0"]
+def write(sock, address, msg_params):
+    # 0 is block number
+    ack_params = [ACK, 0]
     try:
-        f = open(msg_params_list[1], 'a')  # should it be a? or w ?
+        f = open(msg_params[1], 'a')  # should it be a? or w ?
     except OSError as err:
         print(err.stderror)
         if err == FileExistsError:
-            create_msg_and_send_it(ERROR, [ERROR, "06", "File already exists", "0"], 4, addr, soc_serv, 0)
+            send_msg([ERROR, "06", "File already exists"], address, sock, 0)
         elif err == PermissionError:
-            create_msg_and_send_it(ERROR, [ERROR, "02", "Access to file denied", "0"], 4, addr, soc_serv, 0)
+            send_msg([ERROR, "02", "Access to file denied", "0"], address, sock, 0)
         else:  # what is the error for full memore ???
-            create_msg_and_send_it(ERROR, [ERROR, "00", "unknown error while opening the file", "0"], 4, addr, soc_serv,
-                                   0)
+            send_msg([ERROR, "00", "unknown error while opening the file", "0"], address, sock, 0)
         return
     got_to_eof = 0
-    new_msg_params = create_msg_and_send_it(ACK, ack_params, 2, addr, soc_serv, 0)
+    new_msg_params = send_msg(ack_params, address, sock, 0)
     while got_to_eof == 0:
-        if new_msg_params == None:
+        if new_msg_params is None:
             print("Connection Timeouted")
             f.close()
             return
         elif new_msg_params[0] == ERROR:
-            print("Error Code : " + new_msg_params[1] + "Error Message : " + new_msg_params[2])
+            print("Error Code : " + new_msg_params[1] + " ,Error Message : " + new_msg_params[2])
             f.close()
             return
-        else:  # meams we got data block, according to send_msg
-            data = new_msg_params[3]
-            ack_params[1] = block_num = new_msg_params[2]
+        else:  # means we got data block, according to send_msg
+            data = new_msg_params[2]
+            # block number
+            ack_params[1] = new_msg_params[1]
             f.write(data)
-            new_msg_params = create_msg_and_send_it(ACK, ack_params, 2, addr, soc_serv, 0)
+            new_msg_params = send_msg(ack_params, address, sock, 0)
             if len(data) < MAX_DATA_LEN:
                 got_to_eof = 0
     f.close()
     return
 
 
-def error_handler(soc_serv, addr, path, adder):
+def error_handler(sock, addr, path, adder):
     return None
 
 
 def parser(msg):
-    opcode = msg[:2]
+    opcode = msg[:2].encode()
     msg = msg[2:]
-    if opcode == 1 or opcode == 2:
-        return opcode, msg[:msg.find(b'0')], "octet"
-    elif opcode == 3:
-        return opcode, msg[:2], msg[2:]
-    elif opcode == 4:
-        return opcode, msg[2:]
+    if opcode == RRQ or opcode == WRQ:
+        return [opcode, msg[:msg.find(b'0')].decode(), "octet"]
+    elif opcode == DATA:
+        return [opcode, msg[:2].decode(), msg[2:].decode()]
+    elif opcode == ACK:
+        return [opcode, msg[2:].decode()]
     else:
-        return opcode, msg[:2], msg[2:-1]
+        return [opcode, msg[:2].decode(), msg[2:-1].decode()]
 
 
-def main():
-    error = 0
-    controlC = 0
+def main(port):
+    socket_created = False
+    try:
+        server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        socket_created = True
+        server_socket.bind(('', port))
+        server_socket.listen(10)
+        while True:
+            first_packet = server_socket.recvfrom((MAX_DATA_LEN * 2))
+            msg = first_packet[0]
+            msg_params = parser(msg)
+            if msg_params[0] == WRQ:
+                write(server_socket, first_packet[1], msg_params)
+            elif msg_params[0] == RRQ:
+                read(msg_params)
+            elif msg_params[0] == ERROR:
+                error_handler(msg_params)
+            elif msg_params[0] == ACK or msg_params[0] == DATA:
+                continue  # we shoukd ignore those message
+        server_socket.close()
+    except OSError as error:
+        if socket_created:
+            server_socket.close()
+        print(error.stderror)
+    except KeyboardInterrupt:
+        if socket_created:
+            server_socket.close()
+        print("Bye Bye")
+        exit(0)
+
+
+if __name__ == "__main__":
     if len(sys.argv) < 2:
         print("The program should get port number")
     else:
         port = int(sys.argv[1])
-        try:
-            soc_serv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            soc_serv.bind(('', port))
-            soc_serv.listen(10)
-            while error == 0 and controlC == 0:  # need to add control+c handler !!!!!!!!!!!!!!!
-                first_packet = soc_serv.recvfrom((MAX_DATA_LEN * 2))
-                msg = first_packet[0].encode()
-                TID = first_packet[1][1]
-                msg_params = parser(msg)
-                if msg_params[0] == WRQ:
-                    MODE = WRITE_MODE
-                    write(msg_params)
-                elif msg_params[0] == RRQ:
-                    MODE = READ_MODE
-                    read(msg_params)
-                elif msg_params[0] == ERROR:
-                    error_handler(msg_params)
-                elif msg_params[0] == ACK or msg_params[0] == DATA:
-                    continue  # we shoukd ignore those message
-            soc_serv.close()
-        except OSError as error:
-            soc_serv.close()
-            print(error.stderror)
-
-
-if __name__ == "__main__":
-    main()
+        main(port)
