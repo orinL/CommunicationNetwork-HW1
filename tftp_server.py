@@ -140,12 +140,7 @@ def read(soc_serv, msg_params_list, addr):
         f = open(msg_params_list[1], 'r')
     except OSError as err:
         print(err.stderror)
-        if err == FileNotFoundError:
-            send_msg([ERROR, "01", "File not found", "0"], addr, soc_serv, 0)
-        elif err == PermissionError:
-            send_msg([ERROR, "02", "Access to file denied", "0"], addr, soc_serv, 0)
-        else:
-            send_msg([ERROR, "00", "Unknown error while opening the file", "0"], addr, soc_serv, 0)
+        error_handler(soc_serv, addr, err)
         return
     got_to_eof = 0
     while got_to_eof == 0:
@@ -179,12 +174,7 @@ def write(sock, address, msg_params):
         f = open(msg_params[1], 'a')  # should it be a? or w ?
     except OSError as err:
         print(err.stderror)
-        if err == FileExistsError:
-            send_msg([ERROR, "06", "File already exists"], address, sock, 0)
-        elif err == PermissionError:
-            send_msg([ERROR, "02", "Access to file denied", "0"], address, sock, 0)
-        else:  # what is the error for full memore ???
-            send_msg([ERROR, "00", "unknown error while opening the file", "0"], address, sock, 0)
+        error_handler(sock, address, err)
         return
     got_to_eof = 0
     new_msg_params = send_msg(ack_params, address, sock, 0)
@@ -209,7 +199,15 @@ def write(sock, address, msg_params):
     return
 
 
-def error_handler(sock, addr, path, adder):
+def error_handler(sock, address, err):
+    if err == FileExistsError:
+        send_msg([ERROR, "06", "File already exists"], address, sock, 0)
+    elif err == PermissionError:
+        send_msg([ERROR, "02", "Access to file denied", "0"], address, sock, 0)
+    if err == FileNotFoundError:
+        send_msg([ERROR, "01", "File not found", "0"], address, sock, 0)
+    else:  # what is the error for full memory ???
+        send_msg([ERROR, "00", "unknown error while opening the file", "0"], address, sock, 0)
     return None
 
 
@@ -242,7 +240,7 @@ def main(port):
             elif msg_params[0] == RRQ:
                 read(msg_params)
             elif msg_params[0] == ERROR:
-                error_handler(msg_params)
+                error_handler(socket, first_packet[1], msg_params)
             elif msg_params[0] == ACK or msg_params[0] == DATA:
                 continue  # we shoukd ignore those message
         server_socket.close()
