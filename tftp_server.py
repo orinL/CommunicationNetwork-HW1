@@ -24,26 +24,32 @@ WRITE_MODE = 1
 MODE = -1
 
 
-def create_msg (opcode, *args):
-    msg = [opcode]
+def create_msg(msg_params):
+    # TODO change to struct pack
+    opcode = msg_params[0]
+    msg_params = msg_params[1:]
+    msg = b'0'
     if opcode == RRQ or opcode == WRQ:
-        msg.append(args[0].encode())
-        msg.append(b'0')
-        msg.append("octet".encode())
-        msg.append(b'0')
+        msg = struct.pack(f"h{len(msg_params[0])}ss5ss",
+                          int(opcode), msg_params[0].encode(), "0".encode(), "octet".encode(), "0".encode())
+        # msg = opcode + msg_params[0] + "0" + "octet" + "0"
+        # msg = msg.encode()
+        print("msg in RRQ/WRQ is ", struct.unpack(f"h{len(msg_params[0])}ss5ss", msg))
     elif opcode == DATA:
-        # TODO make sure we pass only 2 bytes
-        msg.append(str(args[0]).encode())
-        # TODO check if it is array or not
-        msg.extend(args[1].encode())
+        msg = struct.pack(f">hh{len(msg_params[1])}s", int(opcode), msg_params[0], msg_params[1].encode())
+
+        # block_number = struct.pack(">h", msg_params[0])
+        # print("msg in Data before is ", msg.decode())
+        # msg += msg_params[1].encode()
+        print("msg in Data in bytes ", msg)
+        print("msg in Data is ", struct.unpack(f">hh{len(msg_params[1])}s", msg))
     elif opcode == ACK:
-        # TODO make sure we pass only 2 bytes
-        msg.append(str(args[0]).encode())
+        msg = struct.pack(">hh", int(opcode), msg_params[0])
+        print("msg in Ack is ", struct.unpack(">hh", msg))
     elif opcode == ERROR:
-        # TODO make sure we pass only 2 bytes
-        msg.append(str(args[0]).encode())
-        msg.append(args[1].encode(0))
-        msg.append(b'0')
+        msg = opcode + msg_params[0] + msg_params[1] + "0"
+        msg = msg.encode()
+        print("msg in Error is ", msg.decode())
     return msg
 
 
@@ -63,6 +69,7 @@ def create_msg (opcode, *args):
 def send_msg(msg_params, address, sock_server, retransmit_counter):
     msg = create_msg(msg_params)
     sock_server.sendto(msg, address)
+    print("Server sent ", msg_params, msg)
     no_request_need = [NO_REQUEST_NEEDED]
     if msg_params[0] != ERROR:
         # wait for an appropriate acknowledgement or timeout
@@ -92,7 +99,9 @@ def wait_for_acknowledgement(sock_server, msg_waiting_for_ack_params, retransmit
                 send_msg(params_error_list, packet[1], sock_server, 0)
                 continue
             else:
-                packet_params = parser(packet)
+                packet_params = parser(packet[0])
+                print("packet_params", packet_params)
+                print("msg waiting for ack", msg_waiting_for_ack_params)
                 if msg_waiting_for_ack_params[0] == DATA:
                     if packet_params[0] == ACK and packet_params[1] == msg_waiting_for_ack_params[1]:
                         received_appropriate_packet = True
@@ -102,19 +111,6 @@ def wait_for_acknowledgement(sock_server, msg_waiting_for_ack_params, retransmit
                         continue
                 elif msg_waiting_for_ack_params[0] == ACK:
                     if packet_params[0] == DATA or packet_params[0] == ERROR:
-                        received_appropriate_packet = True
-                    else:
-                        continue
-                # TODO need to check if server can send RRQ or WRQ
-                elif msg_waiting_for_ack_params[0] == RRQ:
-                    if packet_params[0] == DATA or packet_params[0] == ERROR:
-                        received_appropriate_packet = True
-                    else:
-                        continue
-                elif msg_waiting_for_ack_params[0] == WRQ:
-                    if packet_params[0] == ACK and packet_params[1] == msg_waiting_for_ack_params[1]:
-                        received_appropriate_packet = True
-                    elif packet_params[0] == ERROR:
                         received_appropriate_packet = True
                     else:
                         continue
@@ -128,7 +124,7 @@ def wait_for_acknowledgement(sock_server, msg_waiting_for_ack_params, retransmit
             else:
                 return None
         else:
-            print(os_err.stderror)
+            # print(os_err.stderror)
             sock_server.close()
             exit(1)  # print error and break, is it the right handele ???????????????????????
 
@@ -139,7 +135,7 @@ def read(soc_serv, msg_params_list, addr):
     try:
         f = open(msg_params_list[1], 'r')
     except OSError as err:
-        print(err.stderror)
+        # print(err.stderror)
         error_handler(soc_serv, addr, err)
         return
     got_to_eof = 0
@@ -148,8 +144,7 @@ def read(soc_serv, msg_params_list, addr):
         data = f.read(512)
         if len(data) < 512:
             got_to_eof = 1
-        # make sure what is block number format to send
-        new_data_params[1] = str(block_number)
+        new_data_params[1] = block_number
         new_data_params[2] = data
         # checking for ack right params in send_msg
         new_msg_params = send_msg(new_data_params, addr, soc_serv, 0)
@@ -173,7 +168,7 @@ def write(sock, address, msg_params):
     try:
         f = open(msg_params[1], 'a')  # should it be a? or w ?
     except OSError as err:
-        print(err.stderror)
+        # print(err.stderror)
         error_handler(sock, address, err)
         return
     got_to_eof = 0
@@ -212,14 +207,16 @@ def error_handler(sock, address, err):
 
 
 def parser(msg):
-    opcode = msg[:2].encode()
+    print("msg[:2] is ", msg[:2])
+    print("msg[2:] is ", msg[2:])
+    opcode = "0" + str(struct.unpack(">h", msg[:2])[0])
     msg = msg[2:]
     if opcode == RRQ or opcode == WRQ:
-        return [opcode, msg[:msg.find(b'0')].decode(), "octet"]
+        return [opcode, msg[:msg.find(b'\x00')].decode(), "octet"]
     elif opcode == DATA:
-        return [opcode, msg[:2].decode(), msg[2:].decode()]
+        return [opcode, struct.unpack(">h", msg[:2])[0], msg[2:].decode()]
     elif opcode == ACK:
-        return [opcode, msg[2:].decode()]
+        return [opcode, struct.unpack(">h", msg[:2])[0]]
     else:
         return [opcode, msg[:2].decode(), msg[2:-1].decode()]
 
@@ -230,16 +227,18 @@ def main(port):
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         socket_created = True
         server_socket.bind(('', port))
-        server_socket.listen(10)
         while True:
             first_packet = server_socket.recvfrom((MAX_DATA_LEN * 2))
             msg = first_packet[0]
             msg_params = parser(msg)
             if msg_params[0] == WRQ:
+                print("Server got write request")
                 write(server_socket, first_packet[1], msg_params)
             elif msg_params[0] == RRQ:
-                read(msg_params)
+                print("Server got read request")
+                read(server_socket, msg_params, first_packet[1])
             elif msg_params[0] == ERROR:
+                print("Server got error message")
                 error_handler(socket, first_packet[1], msg_params)
             elif msg_params[0] == ACK or msg_params[0] == DATA:
                 continue  # we shoukd ignore those message
@@ -247,11 +246,11 @@ def main(port):
     except OSError as error:
         if socket_created:
             server_socket.close()
-        print(error.stderror)
+        # print(error.stderror)
     except KeyboardInterrupt:
         if socket_created:
             server_socket.close()
-        print("Bye Bye")
+        print("\nBye Bye")
         exit(0)
 
 
