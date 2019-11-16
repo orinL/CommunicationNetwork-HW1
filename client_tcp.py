@@ -17,8 +17,10 @@ def recvall(sock, n):
 
 
 def main(ip, port, dir_path):
-    soc_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    init_sock = False
     try:
+        soc_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        init_sock = True
         soc_client.connect((ip, port))
         size_of_msg = struct.pack(">I", len(dir_path))
         soc_client.sendall(size_of_msg)
@@ -32,12 +34,18 @@ def main(ip, port, dir_path):
         if error.errno == errno.ECONNREFUSED:
             print("Connection refused")
         else:
-            print(error.stderror)
-        soc_client.close()
+            print(error)
+        if init_sock:
+            soc_client.close()
+    except KeyboardInterrupt:
+        if init_sock:
+            soc_client.close()
+        print("\nBye Bye")
+        exit(0)
 
 
 if __name__ == "__main__":
     if len(sys.argv) == 4:
         main(sys.argv[1], int(sys.argv[2]), sys.argv[3])
     else:
-       print("The program should get ip, port number and directory path")
+        print("The program should get ip, port number and directory path")
