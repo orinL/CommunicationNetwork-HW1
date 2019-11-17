@@ -24,9 +24,10 @@ def main(port):
     try:
         soc_serv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_sock_init = True
+        socket_init = False
         soc_serv.bind(('', port))
         soc_serv.listen(10)
-        while True:  # to ask about the another while and
+        while True:  
             socket_init = False
             (client_socket, address) = soc_serv.accept()
             socket_init = True
