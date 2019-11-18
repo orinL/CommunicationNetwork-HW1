@@ -1,6 +1,8 @@
+#!/usr/bin/python3
 import socket
 import sys
 import struct
+import errno
 
 # global variables and constants :
 MAX_DATA_LEN = 512
@@ -111,32 +113,31 @@ def read(soc_serv, msg_params_list, addr):
         print(err)
         error_handler(soc_serv, addr, err, RRQ)
         return
-    got_to_eof = 0
-    while got_to_eof == 0:
-        block_number += 1
-        data = f.read(MAX_DATA_LEN)
-        if len(data) < MAX_DATA_LEN:
-            got_to_eof = 1
-        new_data_params[1] = block_number
-        new_data_params[2] = data
-        # checking for ack right params in send_msg
-        new_msg_params = send_msg(new_data_params, addr, soc_serv, 0, True)
-        if new_msg_params is None:
-            print("Connection Timeouted")
-            f.close()
-            return
-        elif new_msg_params[0] == ERROR:
-            print("Error Code : " + new_msg_params[1] + " ,Error Message : " + new_msg_params[2])
-            f.close()
-            return
-        else:  # which mean we got an ack on the data block we sent, and can continue
-            continue
-    # If close failed it means we are in full disk
     try:
+        got_to_eof = 0
+        while got_to_eof == 0:
+            block_number += 1
+            data = f.read(MAX_DATA_LEN)
+            if len(data) < MAX_DATA_LEN:
+                got_to_eof = 1
+            new_data_params[1] = block_number
+            new_data_params[2] = data
+            # checking for ack right params in send_msg
+            new_msg_params = send_msg(new_data_params, addr, soc_serv, 0, True)
+            if new_msg_params is None:
+                print("Connection Timeouted")
+                f.close()
+                return
+            elif new_msg_params[0] == ERROR:
+                print("Error Code : " + new_msg_params[1] + " ,Error Message : " + new_msg_params[2])
+                f.close()
+                return
+            else:  # which mean we got an ack on the data block we sent, and can continue
+                continue
         f.close()
     except OSError as err:
         print(err)
-        error_handler(soc_serv, addr, err, FULL_DISK)
+        error_handler(soc_serv, addr, err, RRQ)
 
 
 # Input: socket, address, msg params
@@ -154,32 +155,32 @@ def write(sock, address, msg_params):
         print(err)
         error_handler(sock, address, err, WRQ)
         return
-    got_to_eof = 0
-    new_msg_params = send_msg(ack_params, address, sock, 0, True)
-    while got_to_eof == 0:
-        if new_msg_params is None:
-            print("Connection Timeouted")
-            f.close()
-            return
-        elif new_msg_params[0] == ERROR:
-            print("Error Code : " + new_msg_params[1] + " ,Error Message : " + new_msg_params[2])
-            f.close()
-            return
-        else:  # means we got data block, according to send_msg
-            data = new_msg_params[2]
-            # block number
-            ack_params[1] = new_msg_params[1]
-            f.write(data)
-            if len(data) < MAX_DATA_LEN:
-                send_msg(ack_params, address, sock, 0, False)
-                got_to_eof = 1
-            else:
-                new_msg_params = send_msg(ack_params, address, sock, 0, True)
     try:
+        got_to_eof = 0
+        new_msg_params = send_msg(ack_params, address, sock, 0, True)
+        while got_to_eof == 0:
+            if new_msg_params is None:
+                print("Connection Timeouted")
+                f.close()
+                return
+            elif new_msg_params[0] == ERROR:
+                print("Error Code : " + new_msg_params[1] + " ,Error Message : " + new_msg_params[2])
+                f.close()
+                return
+            else:  # means we got data block, according to send_msg
+                data = new_msg_params[2]
+                # block number
+                ack_params[1] = new_msg_params[1]
+                f.write(data)
+                if len(data) < MAX_DATA_LEN:
+                    send_msg(ack_params, address, sock, 0, False)
+                    got_to_eof = 1
+                else:
+                    new_msg_params = send_msg(ack_params, address, sock, 0, True)
         f.close()
     except OSError as err:
         print(err)
-        error_handler(sock, address, err, FULL_DISK)
+        error_handler(sock, address, err, WRQ)
 
 
 # Input: socket, address, error, mode
@@ -188,10 +189,10 @@ def write(sock, address, msg_params):
 def error_handler(sock, address, err, mode):
     if mode == UNKNOWN_ID:
         send_msg([ERROR, "05", "Unknown transfer ID"], address, sock, 0, False)
-    elif mode == FULL_DISK:
-        send_msg([ERROR, "03", "Disk full or allocation exceeded"], address, sock, 0, False)
     elif mode == ILLEGAL:
         send_msg([ERROR, "04", "Illegal TFTP operation"], address, sock, 0, False)
+    elif err.errno == errno.EDQUOT:
+        send_msg([ERROR, "03", "Disk full or allocation exceeded"], address, sock, 0, False)
     elif err.errno == 13 and mode == WRQ:
         send_msg([ERROR, "06", "File already exists"], address, sock, 0, False)
     elif err.errno == 13 and mode == RRQ:

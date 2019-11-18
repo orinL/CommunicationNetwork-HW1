@@ -28,7 +28,7 @@ def main(ip, port, dir_path):
         data_rec = recvall(soc_client, 4)
         len_of_rec_msg = struct.unpack(">I", data_rec)[0]
         data = recvall(soc_client, len_of_rec_msg)
-        print(data.decode(), end ="")
+        print(data.decode(), end="")
         soc_client.close()
     except OSError as error:
         if error.errno == errno.ECONNREFUSED:
