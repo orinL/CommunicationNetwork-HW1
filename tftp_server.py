@@ -222,6 +222,8 @@ def parser(msg):
 def main(port):
     socket_created = False
     try:
+        if not(1 <= port <= 65535):
+            raise ValueError
         server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         socket_created = True
         server_socket.bind(('', port))
@@ -246,6 +248,8 @@ def main(port):
             server_socket.close()
         print("\nBye Bye")
         exit(0)
+    except ValueError:
+        print("Invalid port number, should be between 1 and 65535")
 
 
 if __name__ == "__main__":

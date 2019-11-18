@@ -22,6 +22,8 @@ def main(port):
     size_of_int = 4
     server_sock_init = False
     try:
+        if not(1 <= port <= 65535):
+            raise ValueError
         soc_serv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_sock_init = True
         socket_init = False
@@ -55,6 +57,8 @@ def main(port):
             soc_serv.close()
         print("\nBye Bye")
         exit(0)
+    except ValueError:
+        print("Invalid port number, should be between 1 and 65535")
 
 
 if __name__ == "__main__":

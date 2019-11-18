@@ -19,6 +19,8 @@ def recvall(sock, n):
 def main(ip, port, dir_path):
     init_sock = False
     try:
+        if not(1 <= port <= 65535):
+            raise ValueError
         soc_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         init_sock = True
         soc_client.connect((ip, port))
@@ -42,6 +44,8 @@ def main(ip, port, dir_path):
             soc_client.close()
         print("\nBye Bye")
         exit(0)
+    except ValueError:
+        print("Invalid port number, should be between 1 and 65535")
 
 
 if __name__ == "__main__":
