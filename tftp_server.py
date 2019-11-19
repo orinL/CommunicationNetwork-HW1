@@ -3,6 +3,7 @@ import socket
 import sys
 import struct
 import errno
+import random
 
 # global variables and constants :
 MAX_DATA_LEN = 512
@@ -221,6 +222,8 @@ def parser(msg):
 # Main
 def main(port):
     socket_created = False
+    client_socket_created = False
+
     try:
         if not(1 <= port <= 65535):
             raise ValueError
@@ -230,22 +233,34 @@ def main(port):
         while True:
             server_socket.settimeout(None)
             first_packet = server_socket.recvfrom((MAX_DATA_LEN * 2))
+            # creating new socket for communication with that client
+            random_port = random.randint(0, 65535) #this is the range of valid ports
+            client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            client_socket_created = True
+            client_socket.bind(('', random_port))
+            # analyzing which packet it is
             msg = first_packet[0]
             msg_params = parser(msg)
             if msg_params[0] == WRQ:
-                write(server_socket, first_packet[1], msg_params)
+                write(client_socket, first_packet[1], msg_params)
             elif msg_params[0] == RRQ:
-                read(server_socket, msg_params, first_packet[1])
+                read(client_socket, msg_params, first_packet[1])
             else:
-                error_handler(server_socket, first_packet[1], None, ILLEGAL)
+                error_handler(client_socket, first_packet[1], None, ILLEGAL)
+            client_socket.close()
+            client_socket_created = False
         server_socket.close()
     except OSError as error:
         if socket_created:
             server_socket.close()
+        if client_socket_created:
+            client_socket.close()
         print(error)
     except KeyboardInterrupt:
         if socket_created:
             server_socket.close()
+        if client_socket_created:
+            client_socket.close()
         print("\nBye Bye")
         exit(0)
     except ValueError:
