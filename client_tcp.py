@@ -21,6 +21,12 @@ def main(ip, port, dir_path):
     try:
         if not(1 <= port <= 65535):
             raise ValueError
+        if not(ip.count(".") == 3):
+            raise NameError
+        ip_values = ip.split(".")
+        for val in ip_values:
+            if val < 0 or val > 255:
+                raise NameError
         soc_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         init_sock = True
         soc_client.connect((ip, port))
@@ -46,7 +52,8 @@ def main(ip, port, dir_path):
         exit(0)
     except ValueError:
         print("Invalid port number, should be between 1 and 65535")
-
+    except NameError:
+        print("Invalid IP, should be in form x.x.x.x where x >=0 or x < 256")
 
 if __name__ == "__main__":
     if len(sys.argv) == 4:
