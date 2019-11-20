@@ -19,13 +19,13 @@ def recvall(sock, n):
 def main(ip, port, dir_path):
     init_sock = False
     try:
-        if not(1 <= port <= 65535):
-            raise ValueError
-        if not(ip.count(".") == 3):
+        if not (0 <= port and port <= 65535):
+            raise AttributeError
+        if not (ip.count(".") == 3):
             raise NameError
         ip_values = ip.split(".")
         for val in ip_values:
-            if val < 0 or val > 255:
+            if int(val) < 0 or int(val) > 255:
                 raise NameError
         soc_client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         init_sock = True
@@ -51,9 +51,12 @@ def main(ip, port, dir_path):
         print("\nBye Bye")
         exit(0)
     except ValueError:
-        print("Invalid port number, should be between 1 and 65535")
+        print("Invalid IP, should be in form x.x.x.x where 0<=x<=255")
     except NameError:
-        print("Invalid IP, should be in form x.x.x.x where x >=0 or x < 256")
+        print("Invalid IP, should be in form x.x.x.x where 0<=x<=255")
+    except AttributeError:
+        print("Invalid port number, should be between 0 and 65535")
+
 
 if __name__ == "__main__":
     if len(sys.argv) == 4:
