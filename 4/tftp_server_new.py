@@ -4,7 +4,6 @@ import sys
 import struct
 import errno
 import random
-import threading
 from threading import Timer
 from select import select
 
@@ -29,6 +28,8 @@ socket_to_recv_list = []
 socket_to_send_list = []
 
 
+# SocketDetails class is a class that obtains every detail a client socket need when
+# it tries to communicate with the server
 class SocketDetails:
     def __init__(self, req_id, file_path, msg_to_send, offset, address,
                  block_number, is_finished, packet_recv, counter, timer_thread):
@@ -60,50 +61,66 @@ def create_msg(msg_params):
     return msg
 
 
+# Input: nothing
+# Output: nothing
+# Goal: update the msg_to_send in the relevant field in the relevant class
 def update_before_send_dict():
+    # for every socket we want to send to a packet
     for sock, details in socket_dict.items():
         if sock in socket_to_send_list:
+            # if his request was RRQ
             if details.req_id == RRQ:
                 try:
+                    # open file path
                     f = open(details.file_path, 'r')
+                # if an error occured, the msg_to_send is going to be error msg
                 except OSError as err:
                     print(err)
-                    details.msg_to_send = error_handler(sock, details.address, err, RRQ)
+                    details.msg_to_send = error_handler(err, RRQ)
                     return
                 # move to offset according to what we already read
                 f.seek(details.offset)
+                # read relevant data
                 data = f.read(MAX_DATA_LEN)
-
+                # since we are read - first block number is 1
                 if details.block_number == 0:
                     details.block_number = 1
                 # prepare new packet to send
                 new_data_params = [DATA, details.block_number, data]
                 details.msg_to_send = create_msg(new_data_params)
+                # close file descriptor
                 f.close()
+            # if his request was WRQ
             elif details.req_id == WRQ:
+                # build ack message
                 ack_params = [ACK, details.block_number]
+                # try to open and write the data
                 try:
                     f = open(details.file_path, 'a')
                 except OSError as err:
                     print(err)
-                    details.msg_to_send = error_handler(sock, details.address, err, WRQ)
+                    # if an error occured, the msg_to_send is going to be error msg
+                    details.msg_to_send = error_handler(err, WRQ)
                     return
 
                 # if we are not sending first ack param
                 if details.block_number > 0:
+                    # we need to extract data to write from packet we got
                     new_msg_params = parser(details.packet_recv[0])
                     data = new_msg_params[2]
                     f.write(data)
                     f.close()
+                # update msg_to_send
                 details.msg_to_send = create_msg(ack_params)
+            # if we got error packet - we send error msg to client
             else:
-                details.msg_to_send = error_handler(sock, details[4], None, ILLEGAL)
+                details.msg_to_send = error_handler(None, ILLEGAL)
 
 
 # Input: socket, address, error, mode
 # Output: creates the relevant message to the client. Returns packed msg
 # Notes: messages according to protocol
-def error_handler(sock, address, err, mode):
+def error_handler(err, mode):
     # if we have error while receiving packet we finish connection
     if mode == UNKNOWN_ID:
         return create_msg([ERROR, "05", "Unknown transfer ID"])
@@ -136,22 +153,15 @@ def parser(msg):
         return [opcode, msg[:2].decode(), msg[2:-1].decode()]
 
 
-# Input: socket, msg that wait for ack params, re-transmit counter, address
-# Output: params list of ack/data message. or None
-# Notes: perform the timeout and retransmit mechanism
-# this function wait for acknowledgement on sent message
-# if the timeout expired, we will retransmit
-# after 3 retransmits, we fill finish the connection
-# if we got packet, we check if it is the ack we expected to(ACK or DATA).
-# if so, we will return it's params list.
-# otherwise, we will ignore the packet and wait for another one.
-# if connection is timeout, None will be returned.
+# Input: client_socket, packet we received, address
+# Output: True if we got correct packet, False o/w
+# Notes: we check if it is the ack we expected to(ACK or DATA).
 def check_acknowledgement(client_socket, packet, address):
     received_appropriate_packet = False
     msg_waiting_for_ack_params = parser(socket_dict[client_socket].msg_to_send)
     try:
         if packet[1][1] != address[1]:
-            error_handler(client_socket, packet[1], None, UNKNOWN_ID)
+            error_handler(None, UNKNOWN_ID)
             return False
         else:
             packet_params = parser(packet[0])
@@ -165,76 +175,107 @@ def check_acknowledgement(client_socket, packet, address):
             elif msg_waiting_for_ack_params[0] == ACK:
                 if packet_params[0] == DATA or packet_params[0] == ERROR:
                     received_appropriate_packet = True
-        # print("acked block# ", packet_params[1], "when I had ", msg_waiting_for_ack_params[1])
-        # print("boolean ", received_appropriate_packet)
         return received_appropriate_packet
     except OSError as os_err:
         print(os_err)
-        client_socket.close()
+        for client_socket in list(socket_dict.keys()):
+            client_socket.close()
+        thread_lst = [sock for sock in socket_dict.keys() if not socket_dict[sock].timer_thread is None]
+        for sock in thread_lst:
+            socket_dict[sock].timer_thread.cancel()
         exit(1)
 
 
-# if timer finishes and we didn't cancel it
+# Input: client_socket
+# Output: nothing
+# Notes: if timer finishes and we didn't cancel it we will get here and handle re-transmit
 def timer_handler(client_socket):
-    # if we didn't receive packet - this is why we got to handler
     # decrease retransmit counter
     socket_dict[client_socket].counter -= 1
-    # add to send to socket list
+    # add to send to socket list in order to re-transmit
     socket_to_send_list.append(client_socket)
 
 
-# we received a packet - let's check it
+# Input: client_socket
+# Output: True if we got correct packet, False o/w
+# Notes: we received a packet so we check if it's the correct one and we act correspondly
 def handle_recv_packet(client_socket):
     # check if we got correct packet
     if check_acknowledgement(client_socket,
                              socket_dict[client_socket].packet_recv, socket_dict[client_socket].address):
+        # remove socket from socket_to_recv_list
         socket_to_recv_list.remove(client_socket)
         new_msg_params = parser(socket_dict[client_socket].packet_recv[0])
         if new_msg_params[0] == ERROR:
             return
-
+        # if we are not finished
         if not socket_dict[client_socket].is_finished:
+            # update offset
             socket_dict[client_socket].offset += MAX_DATA_LEN
+            # update block number according to req_id
             if socket_dict[client_socket].req_id == RRQ:
                 socket_dict[client_socket].block_number += 1
             elif socket_dict[client_socket].req_id == WRQ:
                 socket_dict[client_socket].block_number = new_msg_params[1]
+            # add socket to send to list
             socket_to_send_list.append(client_socket)
+    # if we didn't get correct message we leave socket in socket_to_recv_list in order to try again to receive it
 
 
+# Input: writable_socket
+# Output: True if we have more chance to send message, False o/w
+# Notes: check if we can still try to send message and open timer if we can,
+#        otherwise, announce we Timouted
 def create_timer_thread_and_handle_retransmit(writable_socket):
     # if we can re-transmit
     if socket_dict[writable_socket].counter > 0:
+        # remove socket from socket_to_recv_list
+        # since we will add it again after we sendto again
+        if writable_socket in socket_to_recv_list:
+            socket_to_recv_list.remove(writable_socket)
+        # if we are not done
         if not socket_dict[writable_socket].is_finished:
             # create timer thread
             socket_dict[writable_socket].timer_thread = \
-                Timer(timeout_in_seconds, timer_handler, writable_socket)
+                Timer(timeout_in_seconds, timer_handler, (writable_socket,))
             # execute timer
             socket_dict[writable_socket].timer_thread.start()
+        return True
     # if we can't retransmit anymore
     else:
-        print("Connection Timeouted for", writable_socket[0])
+        # print relevant message and update lists and dict
+        print("Connection Timeouted for ", socket_dict[writable_socket].address)
         if writable_socket in socket_to_send_list:
             socket_to_send_list.remove(writable_socket)
         if writable_socket in socket_to_recv_list:
             socket_to_recv_list.remove(writable_socket)
         del socket_dict[writable_socket]
+        # close socket
         writable_socket.close()
+        return False
 
 
+# Input: client_socket
+# Output: nothing
+# Notes: update the is_finished field in class
 def update_is_finished(client_socket):
+    # if we received a packet
     if not socket_dict[client_socket].packet_recv is None:
         new_msg_params = parser(socket_dict[client_socket].packet_recv[0])
+        # check if we got error packet
         if new_msg_params[0] == ERROR:
             print("Error Code : " + new_msg_params[1] + " ,Error Message : " + new_msg_params[2])
             socket_dict[client_socket].is_finished = True
+        # if we are in WRQ and data len is smaller than MAX_DATA_LEN
         elif socket_dict[client_socket].req_id == WRQ:
             data = new_msg_params[2]
             if len(data) < MAX_DATA_LEN:
                 socket_dict[client_socket].is_finished = True
+    # if we sent a packet
     new_msg_params = parser(socket_dict[client_socket].msg_to_send)
-    data = new_msg_params[2]
+    # if we are in RRQ and data len is smaller than MAX_DATA_LEN
     if socket_dict[client_socket].req_id == RRQ:
+        data = new_msg_params[2]
         if len(data) < MAX_DATA_LEN:
             socket_dict[client_socket].is_finished = True
     elif new_msg_params[0] == ERROR:
@@ -250,7 +291,7 @@ def main(port):
         socket_created = True
         server_socket.bind(('', port))
         while True:
-            readable, writable, x = select([server_socket], [], [], 1)
+            readable, writable, x = select([server_socket], [], [], 0)
             # check if our server is readable
             # which means it is ready to accept new client
             if server_socket in readable:
@@ -274,24 +315,28 @@ def main(port):
             # update dict of sockets that wait for sendto
             update_before_send_dict()
             # Check who is writable and send him relevant packet
-            readable, writable, x = select([], socket_to_send_list, [], 1)
+            readable, writable, x = select([], socket_to_send_list, [], 0)
             for writable_socket in writable:
                 writable_socket.sendto(socket_dict[writable_socket].msg_to_send, socket_dict[writable_socket].address)
                 # print("sent block# ", parser(socket_dict[writable_socket].msg_to_send)[1])
-                socket_dict[writable_socket].counter = max_retransmission
+                if socket_dict[writable_socket].timer_thread is None:
+                    socket_dict[writable_socket].counter = max_retransmission
                 update_is_finished(writable_socket)
-                if not socket_dict[writable_socket].is_finished:
-                    socket_to_recv_list.append(writable_socket)
-                socket_to_send_list.remove(writable_socket)
                 # re-transmit and timer thread
-                create_timer_thread_and_handle_retransmit(writable_socket)
+                if create_timer_thread_and_handle_retransmit(writable_socket):
+                    if not socket_dict[writable_socket].is_finished:
+                        socket_to_recv_list.append(writable_socket)
+                    socket_to_send_list.remove(writable_socket)
+                
             # for every socket we didn't receive response from
-            readable, writable, x = select(socket_to_recv_list, [], [], 1)
+            readable, writable, x = select(socket_to_recv_list, [], [], 0)
             for sock in readable:
                 packet = sock.recvfrom(MAX_DATA_LEN * 2)
                 socket_dict[sock].timer_thread.cancel()
+                socket_dict[sock].timer_thread = None
                 socket_dict[sock].packet_recv = packet
                 handle_recv_packet(sock)
+            
             # for every socket we finished the connection with it
             finished_lst = [sock for sock in socket_dict.keys() if socket_dict[sock].is_finished]
             for finished_socket in finished_lst:
@@ -308,12 +353,18 @@ def main(port):
             server_socket.close()
         for client_socket in list(socket_dict.keys()):
             client_socket.close()
+        thread_lst = [sock for sock in socket_dict.keys() if not socket_dict[sock].timer_thread is None]
+        for sock in thread_lst:
+            socket_dict[sock].timer_thread.cancel()
         print(error)
     except KeyboardInterrupt:
         if socket_created:
             server_socket.close()
         for client_socket in list(socket_dict.keys()):
             client_socket.close()
+        thread_lst = [sock for sock in socket_dict.keys() if not socket_dict[sock].timer_thread is None]
+        for sock in thread_lst:
+            socket_dict[sock].timer_thread.cancel()
         print("\nBye Bye")
         exit(0)
     except ValueError:
