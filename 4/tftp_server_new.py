@@ -281,6 +281,7 @@ def update_is_finished(client_socket):
     elif new_msg_params[0] == ERROR:
         socket_dict[client_socket].is_finished = True
 
+
 # Main
 def main(port):
     socket_created = False
