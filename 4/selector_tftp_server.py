@@ -24,6 +24,9 @@ FULL_DISK = "Disk is full"
 ILLEGAL = "Illegal TFTP "
 UNKNOWN_ID = "Unknown ID"
 
+# global lists:
+timer_threads_lst = []
+socket_lst = []
 
 
 # SocketDetails class is a class that obtains every detail a client socket need when
@@ -63,55 +66,53 @@ def create_msg(msg_params):
 # Output: nothing
 # Goal: update the msg_to_send in the relevant field in the relevant class
 def update_before_send(details):
-    # if his request was RRQ
-    if details.req_id == RRQ:
-        try:
+    try:
+        # if we received packet and it was from wrong TID
+        if details.packet_recv is not None:
+            if details.packet_recv[1][1] != details.address[1]:
+                details.msg_to_send = error_handler(None, UNKNOWN_ID)
+                return details
+        # if his request was RRQ
+        if details.req_id == RRQ:
             # open file path
             f = open(details.file_path, 'r')
-        # if an error occured, the msg_to_send is going to be error msg
-        except OSError as err:
-            print(err)
-            details.msg_to_send = error_handler(err, RRQ)
-            return details
-        # move to offset according to what we already read
-        f.seek(details.offset)
-        # read relevant data
-        data = f.read(MAX_DATA_LEN)
-        # since we are read - first block number is 1
-        if details.block_number == 0:
-            details.block_number = 1
-        # prepare new packet to send
-        new_data_params = [DATA, details.block_number, data]
-        details.msg_to_send = create_msg(new_data_params)
-        # close file descriptor
-        f.close()
-        return details
-    # if his request was WRQ
-    elif details.req_id == WRQ:
-        # build ack message
-        ack_params = [ACK, details.block_number]
-        # try to open and write the data
-        try:
-            f = open(details.file_path, 'a')
-        except OSError as err:
-            print(err)
-            # if an error occured, the msg_to_send is going to be error msg
-            details.msg_to_send = error_handler(err, WRQ)
-            return details
-
-        # if we are not sending first ack param
-        if details.block_number > 0:
-            # we need to extract data to write from packet we got
-            new_msg_params = parser(details.packet_recv[0])
-            data_msg = new_msg_params[2]
-            f.write(data_msg)
+            # move to offset according to what we already read
+            f.seek(details.offset)
+            # read relevant data
+            data = f.read(MAX_DATA_LEN)
+            # since we are read - first block number is 1
+            if details.block_number == 0:
+                details.block_number = 1
+            # prepare new packet to send
+            new_data_params = [DATA, details.block_number, data]
+            details.msg_to_send = create_msg(new_data_params)
+            # close file descriptor
             f.close()
-        # update msg_to_send
-        details.msg_to_send = create_msg(ack_params)
-    # if we got error packet - we send error msg to client
-    else:
-        details.msg_to_send = error_handler(None, ILLEGAL)
-    return details
+            return details
+        # if his request was WRQ
+        elif details.req_id == WRQ:
+            # build ack message
+            ack_params = [ACK, details.block_number]
+            # try to open and write the data
+            f = open(details.file_path, 'a')
+            # if we are not sending first ack param
+            if details.block_number > 0:
+                # we need to extract data to write from packet we got
+                new_msg_params = parser(details.packet_recv[0])
+                data_msg = new_msg_params[2]
+                f.write(data_msg)
+                f.close()
+            # update msg_to_send
+            details.msg_to_send = create_msg(ack_params)
+        # if we got error packet - we send error msg to client
+        else:
+            details.msg_to_send = error_handler(None, ILLEGAL)
+        return details
+    except OSError as err:
+        print(err)
+        # if an error occured, the msg_to_send is going to be error msg
+        details.msg_to_send = error_handler(err, WRQ)
+        return details
 
 
 # Input: socket, address, error, mode
@@ -158,7 +159,7 @@ def check_acknowledgement(client_socket, packet, address, msg_to_send):
     msg_waiting_for_ack_params = parser(msg_to_send)
     try:
         if packet[1][1] != address[1]:
-            error_handler(None, UNKNOWN_ID)
+            # we will send Error message when we get to update_before_send_dict
             return False
         else:
             packet_params = parser(packet[0])
@@ -175,11 +176,10 @@ def check_acknowledgement(client_socket, packet, address, msg_to_send):
         return received_appropriate_packet
     except OSError as os_err:
         print(os_err)
-        # for client_socket in list(socket_dict.keys()):
-        #     client_socket.close()
-        # thread_lst = [sock for sock in socket_dict.keys() if not socket_dict[sock].timer_thread is None]
-        # for sock in thread_lst:
-        #     socket_dict[sock].timer_thread.cancel()
+        for client_socket in socket_lst:
+            client_socket.close()
+        for timer_thread in timer_threads_lst:
+            timer_thread.cancel()
         exit(1)
 
 
@@ -238,6 +238,9 @@ def create_timer_thread_and_handle_retransmit(writable_socket, data):
             # create timer thread
             data.timer_thread = \
                 Timer(timeout_in_seconds, timer_handler, (writable_socket, data))
+            # append timer thread to list
+            timer_threads_lst.append(data.timer_thread)
+
             # execute timer
             data.timer_thread.start()
         return data.timer_thread
@@ -300,6 +303,8 @@ def main(port):
                     random_port = random.randint(0, 65535)  # this is the range of valid ports
                     client_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
                     client_socket.bind(('', random_port))
+                    # add socket to list
+                    socket_lst.append(client_socket)
                     client_socket.setblocking(False)
                     # take msg from packet
                     msg = first_packet[0]
@@ -323,6 +328,8 @@ def main(port):
                     if mask & selectors.EVENT_READ:
                         packet = sock.recvfrom(MAX_DATA_LEN * 2)
                         data.timer_thread.cancel()
+                        # remove timer thread from list
+                        timer_threads_lst.remove(data.timer_thread)
                         data.timer_thread = None
                         data.packet_recv = packet
                         handle_recv_packet(sock, data)
@@ -344,6 +351,7 @@ def main(port):
                                 sel.register(sock, selectors.EVENT_READ, data)
                             # if we are finished we can close
                             else:
+                                socket_lst.remove(sock)
                                 sock.close()
                         # otherwise we timeouted the connection so we need to unregister it
                         else:
@@ -353,11 +361,19 @@ def main(port):
         if socket_created:
             server_socket.close()
         print(error)
+        for client_socket in socket_lst:
+            client_socket.close()
+        for timer_thread in timer_threads_lst:
+            timer_thread.cancel()
+        exit(1)
     except KeyboardInterrupt:
         if socket_created:
             server_socket.close()
         print("\nBye Bye")
-        # if there are timer threads alive we will wait for them to finish
+        for client_socket in socket_lst:
+            client_socket.close()
+        for timer_thread in timer_threads_lst:
+            timer_thread.cancel()
         exit(0)
     except ValueError:
         print("Invalid port number, should be between 1 and 65535")
